@@ -12,6 +12,7 @@ import os
 import subprocess
 import socket
 import time
+import tempfile
 
 def main():
     try:
@@ -47,7 +48,7 @@ def main():
             f"Command: `{command_line}`"
         )
 
-        SOCK_FILE = "/tmp/lgtm_daemon.sock"
+        SOCK_FILE = os.path.join(tempfile.gettempdir(), "lgtm_daemon.sock")
         daemon_script = os.path.join(os.path.dirname(__file__), "lgtm_daemon.py")
         
         # Check if daemon is running
@@ -125,7 +126,7 @@ def main():
             eval_env["AGY_HOOK_BYPASS"] = "1"
             result = subprocess.run(
                 ["agy", "-p", prompt, "--model", "gemini-3.8-flash-low", "--new-project"],
-                capture_output=True, text=True, env=eval_env, cwd="/tmp"
+                capture_output=True, text=True, env=eval_env, cwd=tempfile.gettempdir()
             )
             llm_response = result.stdout.strip()
         
@@ -147,7 +148,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 EOF
 
 cat << 'EOF' > ~/.gemini/config/scripts/lgtm_daemon.py
@@ -157,24 +157,29 @@ import sys
 import subprocess
 import json
 import time
+import tempfile
 
-SOCK_FILE = "/tmp/lgtm_daemon.sock"
+SOCK_FILE = os.path.join(tempfile.gettempdir(), "lgtm_daemon.sock")
 
 def spawn_agy():
     env = os.environ.copy()
     env["AGY_HOOK_BYPASS"] = "1"
     proc = subprocess.Popen(
         ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low", "--new-project"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, cwd="/tmp"
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, cwd=tempfile.gettempdir()
     )
-    for line in proc.stdout:
-        if "init" in line:
+    while True:
+        line = proc.stdout.readline()
+        if not line or "init" in line:
             break
     return proc
 
 def main():
     if os.path.exists(SOCK_FILE):
-        os.remove(SOCK_FILE)
+        try:
+            os.remove(SOCK_FILE)
+        except OSError:
+            pass
         
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(SOCK_FILE)
@@ -199,11 +204,19 @@ def main():
             proc.stdin.flush()
             
             response = ""
-            for line in proc.stdout:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
                 if "result" in line.lower() and "response" in line.lower():
                     try:
                         res = json.loads(line)
-                        response = res.get("result", {}).get("response", "")
+                        result_obj = res.get("result", {})
+                        if result_obj.get("status") == "ERROR":
+                            err_msg = result_obj.get("error", "Unknown error")
+                            response = f'{{"decision": "deny", "reason": "API Error: {err_msg}"}}'
+                        else:
+                            response = result_obj.get("response", "")
                     except:
                         pass
                     break
@@ -223,13 +236,15 @@ def main():
                 count = 0
                 
         except Exception as e:
-            conn.send(f'{{"decision": "deny", "reason": "daemon error: {str(e)}"}}\n'.encode('utf-8'))
+            try:
+                conn.send(f'{{"decision": "deny", "reason": "daemon error: {str(e)}"}}\n'.encode('utf-8'))
+            except:
+                pass
         finally:
             conn.close()
 
 if __name__ == "__main__":
     main()
-
 EOF
 
 chmod +x ~/.gemini/config/scripts/ai_approval_hook.py
