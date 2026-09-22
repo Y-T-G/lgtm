@@ -19,9 +19,14 @@ mkdir -p "$SCRIPTS_DIR"
 
 cat << 'INNER_EOF' > "$SCRIPT_FILE"
 #!/usr/bin/env python3
-import sys, json, subprocess
+import sys, json, subprocess, os
 
 def main():
+    # Prevent infinite recursion and disable tool use in the inner evaluation
+    if os.environ.get("AGY_HOOK_BYPASS") == "1":
+        print(json.dumps({"decision": "deny", "reason": "Tools are disabled during LLM evaluation"}))
+        return
+
     try:
         input_data = json.load(sys.stdin)
     except json.JSONDecodeError:
@@ -42,17 +47,18 @@ def main():
 
     # Fast-path for safe read commands
     safe_prefixes = (
-        "ls ", "ls", "grep ", "head ", "tail ", "find ", "pwd", "whoami", 
-        "ps ", "ps", "env", "git diff", "git status", "git log", "git show", 
-        "file ", "stat ", "wc ", "tree ", "jq ", "date"
+        "ls ", "ls", "grep ", "head ", "tail ", "find ", "pwd", "whoami",
+        "ps ", "ps", "env", "git diff", "git status", "git log", "git show",
+        "file ", "stat ", "wc ", "tree ", "jq ", "date", "uname", "git "
     )
     if command_line.startswith(safe_prefixes):
         print(json.dumps({
-            "decision": "allow", 
+            "decision": "allow",
             "reason": "Fast-path: Safe read command"
         }))
         return
 
+    # LLM evaluation for unknown commands
     prompt = (
         f"You are a security assistant. Evaluate if the following shell command is safe to run automatically "
         f"without human approval in a local development environment. "
@@ -65,28 +71,32 @@ def main():
     )
 
     try:
+        # Pass AGY_HOOK_BYPASS to prevent the inner agy from triggering the hook recursively
+        eval_env = os.environ.copy()
+        eval_env["AGY_HOOK_BYPASS"] = "1"
+
+        # Add a timeout of 15 seconds to prevent the hook from getting stuck and killed by Antigravity
         result = subprocess.run(
             ["agy", "-p", prompt, "--model", "gemini-3.8-flash-low"],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True, check=True, env=eval_env, timeout=15
         )
         llm_response = result.stdout.strip()
-        
+
         if llm_response.startswith("```json"): llm_response = llm_response[7:]
         elif llm_response.startswith("```"): llm_response = llm_response[3:]
         if llm_response.endswith("```"): llm_response = llm_response[:-3]
-        
+
         parsed_resp = json.loads(llm_response.strip())
         decision = parsed_resp.get("decision", "deny")
         reason = parsed_resp.get("reason", "LLM decision")
-        
+
         if decision != "allow":
             decision = "deny"
 
-        print(json.dumps({
-            "decision": decision, 
-            "reason": reason
-        }))
-        
+        print(json.dumps({"decision": decision, "reason": reason}))
+
+    except subprocess.TimeoutExpired:
+        print(json.dumps({"decision": "deny", "reason": "LLM evaluation timed out"}))
     except Exception as e:
         print(json.dumps({"decision": "deny", "reason": f"Error calling AI: {str(e)}"}))
 
