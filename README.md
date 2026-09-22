@@ -28,8 +28,14 @@ The system uses two components:
 
 Run the install script to copy the hook and daemon to your Antigravity configuration directory:
 
+**Mac/Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.sh | bash
+```
+
+**Windows:**
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.ps1" -OutFile "$env:TEMP\install.ps1"; & "$env:TEMP\install.ps1"
 ```
 
 The script sets up `~/.gemini/config/scripts/ai_approval_hook.py` and registers it in `~/.gemini/config/hooks.json`.
