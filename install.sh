@@ -75,10 +75,10 @@ def main():
         eval_env = os.environ.copy()
         eval_env["AGY_HOOK_BYPASS"] = "1"
 
-        # Add a timeout of 15 seconds to prevent the hook from getting stuck and killed by Antigravity
+        # Add --new-project and run in /tmp to prevent lock contention and avoid reading workspace AGENTS.md/CLAUDE.md
         result = subprocess.run(
-            ["agy", "-p", prompt, "--model", "gemini-3.8-flash-low"],
-            capture_output=True, text=True, check=True, env=eval_env, timeout=15
+            ["agy", "-p", prompt, "--model", "gemini-3.8-flash-low", "--new-project"],
+            capture_output=True, text=True, check=True, env=eval_env, timeout=15, cwd="/tmp"
         )
         llm_response = result.stdout.strip()
 
