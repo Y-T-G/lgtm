@@ -49,7 +49,7 @@ def main():
     safe_prefixes = (
         "ls ", "ls", "grep ", "head ", "tail ", "find ", "pwd", "whoami",
         "ps ", "ps", "env", "git diff", "git status", "git log", "git show",
-        "file ", "stat ", "wc ", "tree ", "jq ", "date", "uname", "git "
+        "file ", "stat ", "wc ", "tree ", "jq ", "date", "uname"
     )
     if command_line.startswith(safe_prefixes):
         print(json.dumps({
