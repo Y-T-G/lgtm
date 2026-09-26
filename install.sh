@@ -268,7 +268,7 @@ cat << 'EOF' > ~/.gemini/config/hooks.json
         "hooks": [
           {
             "type": "command",
-            "command": "./scripts/ai_approval_hook.py",
+            "command": "python3 ./scripts/ai_approval_hook.py",
             "timeout": 45
           }
         ]
