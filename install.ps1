@@ -18,7 +18,6 @@ import getpass
 
 USER = getpass.getuser()
 PORT_FILE = os.path.join(tempfile.gettempdir(), f"lgtm_daemon_{USER}.port")
-LGTM_HOME = os.path.join(tempfile.gettempdir(), f"lgtm_home_{USER}")
 
 def get_daemon_conn():
     if not os.path.exists(PORT_FILE):
@@ -38,11 +37,8 @@ def get_daemon_conn():
         return None, None
 
 def spawn_daemon(daemon_script):
-    os.makedirs(LGTM_HOME, exist_ok=True)
     eval_env = os.environ.copy()
     eval_env["AGY_HOOK_BYPASS"] = "1"
-    eval_env["USERPROFILE"] = LGTM_HOME
-    eval_env["HOME"] = LGTM_HOME
     subprocess.Popen(
         [sys.executable, daemon_script],
         env=eval_env,
@@ -110,12 +106,9 @@ def main():
                 client.close()
 
         if not llm_response:
-            # Fallback to slow mode with isolated home
-            os.makedirs(LGTM_HOME, exist_ok=True)
+            # Fallback to slow mode
             eval_env = os.environ.copy()
             eval_env["AGY_HOOK_BYPASS"] = "1"
-            eval_env["USERPROFILE"] = LGTM_HOME
-            eval_env["HOME"] = LGTM_HOME
             result = subprocess.run(
                 ["agy", "-p", prompt, "--model", "gemini-3.8-flash-low", "--new-project"],
                 capture_output=True, text=True, env=eval_env, cwd=tempfile.gettempdir()
@@ -153,18 +146,13 @@ import tempfile
 import getpass
 import secrets
 import atexit
-import shutil
 
 USER = getpass.getuser()
 PORT_FILE = os.path.join(tempfile.gettempdir(), f"lgtm_daemon_{USER}.port")
-LGTM_HOME = os.path.join(tempfile.gettempdir(), f"lgtm_home_{USER}")
 
 def spawn_agy():
-    os.makedirs(LGTM_HOME, exist_ok=True)
     env = os.environ.copy()
     env["AGY_HOOK_BYPASS"] = "1"
-    env["USERPROFILE"] = LGTM_HOME
-    env["HOME"] = LGTM_HOME
     proc = subprocess.Popen(
         ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low", "--new-project"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, cwd=tempfile.gettempdir()
@@ -234,10 +222,21 @@ def main():
                 conn.sendall(b'{"decision": "deny", "reason": "unauthorized"}')
                 continue
 
+            # Check if child worker process is still alive, respawn if terminated
+            if proc.poll() is not None:
+                proc = spawn_agy()
+
             prompt = req.get("prompt", "")
             payload = {"event": "user", "message": {"content": prompt}}
-            proc.stdin.write(json.dumps(payload) + "\n")
-            proc.stdin.flush()
+
+            try:
+                proc.stdin.write(json.dumps(payload) + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                # Worker died or pipe broken; respawn and retry once
+                proc = spawn_agy()
+                proc.stdin.write(json.dumps(payload) + "\n")
+                proc.stdin.flush()
 
             response = ""
             while True:
@@ -271,7 +270,6 @@ def main():
                     proc.wait(timeout=5)
                 except Exception:
                     proc.kill()
-                shutil.rmtree(LGTM_HOME, ignore_errors=True)
                 proc = spawn_agy()
                 count = 0
 
