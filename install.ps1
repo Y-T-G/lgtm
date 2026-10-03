@@ -15,9 +15,32 @@ import socket
 import time
 import tempfile
 import getpass
+import shutil
 
 USER = getpass.getuser()
 PORT_FILE = os.path.join(tempfile.gettempdir(), f"lgtm_daemon_{USER}.port")
+LGTM_GEMINI_DIR = os.path.join(tempfile.gettempdir(), f"lgtm_gemini_{USER}")
+
+def setup_isolated_gemini_dir():
+    cli_dir = os.path.join(LGTM_GEMINI_DIR, "antigravity-cli")
+    os.makedirs(cli_dir, exist_ok=True)
+    real_gemini = os.path.expanduser("~/.gemini/antigravity-cli")
+    for item in ("antigravity-oauth-token", "settings.json"):
+        src = os.path.join(real_gemini, item)
+        dst = os.path.join(cli_dir, item)
+        if os.path.exists(src):
+            if os.path.islink(dst) or os.path.exists(dst):
+                try:
+                    os.remove(dst)
+                except OSError:
+                    pass
+            try:
+                os.symlink(src, dst)
+            except (OSError, NotImplementedError, AttributeError):
+                try:
+                    shutil.copy2(src, dst)
+                except OSError:
+                    pass
 
 def get_daemon_conn():
     if not os.path.exists(PORT_FILE):
@@ -64,7 +87,8 @@ def main():
         safe_prefixes = (
             "ls ", "ls", "grep ", "head ", "tail ", "find ", "pwd", "whoami",
             "ps ", "ps", "env", "git diff", "git status", "git log", "git show",
-            "file ", "stat ", "wc ", "tree ", "jq ", "date", "uname", "cat "
+            "file ", "stat ", "wc ", "tree ", "jq ", "date", "uname", "cat ",
+            "echo "
         )
         if command_line.startswith(safe_prefixes):
             print(json.dumps({"decision": "allow", "reason": "Fast-path: Safe read command"}))
@@ -106,11 +130,12 @@ def main():
                 client.close()
 
         if not llm_response:
-            # Fallback to slow mode
+            # Fallback to slow mode with isolated gemini directory
+            setup_isolated_gemini_dir()
             eval_env = os.environ.copy()
             eval_env["AGY_HOOK_BYPASS"] = "1"
             result = subprocess.run(
-                ["agy", "-p", prompt, "--model", "gemini-3.8-flash-low", "--new-project"],
+                ["agy", f"--gemini_dir={LGTM_GEMINI_DIR}", "-p", prompt, "--model", "gemini-3.8-flash-low"],
                 capture_output=True, text=True, env=eval_env, cwd=tempfile.gettempdir()
             )
             llm_response = result.stdout.strip()
@@ -146,15 +171,45 @@ import tempfile
 import getpass
 import secrets
 import atexit
+import shutil
 
 USER = getpass.getuser()
 PORT_FILE = os.path.join(tempfile.gettempdir(), f"lgtm_daemon_{USER}.port")
+LGTM_GEMINI_DIR = os.path.join(tempfile.gettempdir(), f"lgtm_gemini_{USER}")
+
+def setup_isolated_gemini_dir():
+    cli_dir = os.path.join(LGTM_GEMINI_DIR, "antigravity-cli")
+    os.makedirs(cli_dir, exist_ok=True)
+    real_gemini = os.path.expanduser("~/.gemini/antigravity-cli")
+    for item in ("antigravity-oauth-token", "settings.json"):
+        src = os.path.join(real_gemini, item)
+        dst = os.path.join(cli_dir, item)
+        if os.path.exists(src):
+            if os.path.islink(dst) or os.path.exists(dst):
+                try:
+                    os.remove(dst)
+                except OSError:
+                    pass
+            try:
+                os.symlink(src, dst)
+            except (OSError, NotImplementedError, AttributeError):
+                try:
+                    shutil.copy2(src, dst)
+                except OSError:
+                    pass
 
 def spawn_agy():
+    setup_isolated_gemini_dir()
     env = os.environ.copy()
     env["AGY_HOOK_BYPASS"] = "1"
     proc = subprocess.Popen(
-        ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--model", "gemini-3.8-flash-low", "--new-project"],
+        [
+            "agy",
+            f"--gemini_dir={LGTM_GEMINI_DIR}",
+            "--input-format", "stream-json",
+            "--output-format", "stream-json",
+            "--model", "gemini-3.8-flash-low"
+        ],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, cwd=tempfile.gettempdir()
     )
     while True:
@@ -206,6 +261,7 @@ def main():
                 os.remove(PORT_FILE)
             except OSError:
                 pass
+        shutil.rmtree(LGTM_GEMINI_DIR, ignore_errors=True)
 
     atexit.register(cleanup)
 
@@ -270,6 +326,7 @@ def main():
                     proc.wait(timeout=5)
                 except Exception:
                     proc.kill()
+                shutil.rmtree(LGTM_GEMINI_DIR, ignore_errors=True)
                 proc = spawn_agy()
                 count = 0
 
