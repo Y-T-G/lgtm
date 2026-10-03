@@ -88,7 +88,7 @@ def main():
             "ls ", "ls", "grep ", "head ", "tail ", "find ", "pwd", "whoami",
             "ps ", "ps", "env", "git diff", "git status", "git log", "git show",
             "file ", "stat ", "wc ", "tree ", "jq ", "date", "uname", "cat ",
-            "echo "
+            "echo ", "sqlite3 "
         )
         if command_line.startswith(safe_prefixes):
             print(json.dumps({"decision": "allow", "reason": "Fast-path: Safe read command"}))
@@ -198,8 +198,30 @@ def setup_isolated_gemini_dir():
                 except OSError:
                     pass
 
+def kill_stale_workers():
+    if os.name != "nt":
+        try:
+            subprocess.run(["pkill", "-9", "-f", f"agy.*--gemini_dir={LGTM_GEMINI_DIR}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+def kill_other_daemons():
+    if os.name != "nt":
+        my_pid = str(os.getpid())
+        try:
+            out = subprocess.check_output(["pgrep", "-f", "lgtm_daemon.py"], text=True)
+            for pid_str in out.strip().split():
+                if pid_str != my_pid:
+                    try:
+                        os.kill(int(pid_str), 9)
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+
 def spawn_agy():
     setup_isolated_gemini_dir()
+    kill_stale_workers()
     env = os.environ.copy()
     env["AGY_HOOK_BYPASS"] = "1"
     proc = subprocess.Popen(
@@ -233,6 +255,8 @@ def main():
                 os.remove(PORT_FILE)
             except OSError:
                 pass
+            kill_other_daemons()
+            kill_stale_workers()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("127.0.0.1", 0))
@@ -256,6 +280,7 @@ def main():
                     proc.kill()
         except Exception:
             pass
+        kill_stale_workers()
         if os.path.exists(PORT_FILE):
             try:
                 os.remove(PORT_FILE)
@@ -326,6 +351,7 @@ def main():
                     proc.wait(timeout=5)
                 except Exception:
                     proc.kill()
+                kill_stale_workers()
                 shutil.rmtree(LGTM_GEMINI_DIR, ignore_errors=True)
                 proc = spawn_agy()
                 count = 0
