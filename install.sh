@@ -255,8 +255,9 @@ def main():
                 os.remove(PORT_FILE)
             except OSError:
                 pass
-            kill_other_daemons()
-            kill_stale_workers()
+
+    kill_other_daemons()
+    kill_stale_workers()
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("127.0.0.1", 0))
@@ -330,7 +331,7 @@ def main():
                         result_obj = res.get("result", {})
                         if result_obj.get("status") == "ERROR":
                             err_msg = result_obj.get("error", "Unknown error")
-                            response = f'{{"decision": "deny", "reason": "API Error: {err_msg}"}}'
+                            response = json.dumps({"decision": "deny", "reason": f"API Error: {err_msg}"})
                         else:
                             response = result_obj.get("response", "")
                     except Exception:
@@ -359,7 +360,7 @@ def main():
         except Exception as e:
             try:
                 if conn:
-                    conn.sendall(f'{{"decision": "deny", "reason": "daemon error: {str(e)}"}}\n'.encode("utf-8"))
+                    conn.sendall(json.dumps({"decision": "deny", "reason": f"daemon error: {str(e)}"}).encode("utf-8") + b"\n")
             except Exception:
                 pass
         finally:
