@@ -12,6 +12,49 @@ import shutil
 USER = getpass.getuser()
 PORT_FILE = os.path.join(tempfile.gettempdir(), f"lgtm_daemon_{USER}.port")
 LGTM_GEMINI_DIR = os.path.join(tempfile.gettempdir(), f"lgtm_gemini_{USER}")
+MAX_RETRIES = 3
+
+def is_network_error(msg: str) -> bool:
+    if not msg:
+        return True
+    msg_lower = msg.lower()
+    keywords = (
+        "stream reading error",
+        "software caused connection abort",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "connection abort",
+        "broken pipe",
+        "network is unreachable",
+        "no route to host",
+        "timed out",
+        "timeout",
+        "deadline_exceeded",
+        "deadline exceeded",
+        "unavailable",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "502",
+        "503",
+        "504",
+        "read tcp",
+        "write tcp",
+        "dial tcp",
+        "temporary failure in name resolution",
+        "getaddrinfo",
+        "unexpected eof",
+        "eof reading",
+        "handshake",
+        "transport",
+        "socket error",
+        "reset by peer",
+        "resource_exhausted",
+        "rate limit",
+        "429",
+    )
+    return any(k in msg_lower for k in keywords)
 
 def setup_isolated_gemini_dir():
     cli_dir = os.path.join(LGTM_GEMINI_DIR, "antigravity-cli")
@@ -121,19 +164,58 @@ def main():
             finally:
                 client.close()
 
+        if llm_response:
+            try:
+                parsed = json.loads(llm_response)
+                reason = parsed.get("reason", "")
+                if is_network_error(reason):
+                    llm_response = ""
+            except Exception:
+                pass
+
         if not llm_response:
             # Fallback to slow mode with isolated gemini directory
             setup_isolated_gemini_dir()
             eval_env = os.environ.copy()
             eval_env["AGY_HOOK_BYPASS"] = "1"
-            result = subprocess.run(
-                ["agy", f"--gemini_dir={LGTM_GEMINI_DIR}", "-p", prompt, "--model", "gemini-3.8-flash-low"],
-                capture_output=True, text=True, env=eval_env, cwd=tempfile.gettempdir()
-            )
-            llm_response = result.stdout.strip()
-        
+            last_err = "Empty response from Gemini API"
+            for attempt in range(MAX_RETRIES):
+                try:
+                    result = subprocess.run(
+                        ["agy", f"--gemini_dir={LGTM_GEMINI_DIR}", "-p", prompt, "--model", "gemini-3.8-flash-low"],
+                        capture_output=True, text=True, env=eval_env, cwd=tempfile.gettempdir(), timeout=20
+                    )
+                    out = result.stdout.strip()
+                    err = result.stderr.strip()
+                    if out:
+                        cleaned = out
+                        if cleaned.startswith("```json"):
+                            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+                        elif cleaned.startswith("```"):
+                            cleaned = cleaned.split("```")[1].split("```")[0].strip()
+                        try:
+                            parsed_check = json.loads(cleaned)
+                            if "decision" in parsed_check:
+                                llm_response = cleaned
+                                break
+                        except Exception:
+                            pass
+                    last_err = err or out or "Empty response from Gemini API"
+                    if attempt < MAX_RETRIES - 1 and (is_network_error(err) or is_network_error(out) or not out):
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    llm_response = out
+                except subprocess.TimeoutExpired:
+                    last_err = "Command timed out"
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                except Exception as e:
+                    last_err = str(e)
+                    break
+
         if not llm_response:
-            print(json.dumps({"decision": "deny", "reason": "Empty response from Gemini API"}))
+            print(json.dumps({"decision": "deny", "reason": f"API Error: {last_err}"}))
             return
             
         try:
@@ -150,4 +232,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

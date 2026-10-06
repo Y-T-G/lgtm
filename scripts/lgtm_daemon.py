@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import socket
 import os
 import sys
@@ -13,6 +14,49 @@ import shutil
 USER = getpass.getuser()
 PORT_FILE = os.path.join(tempfile.gettempdir(), f"lgtm_daemon_{USER}.port")
 LGTM_GEMINI_DIR = os.path.join(tempfile.gettempdir(), f"lgtm_gemini_{USER}")
+MAX_RETRIES = 3
+
+def is_network_error(msg: str) -> bool:
+    if not msg:
+        return True
+    msg_lower = msg.lower()
+    keywords = (
+        "stream reading error",
+        "software caused connection abort",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "connection abort",
+        "broken pipe",
+        "network is unreachable",
+        "no route to host",
+        "timed out",
+        "timeout",
+        "deadline_exceeded",
+        "deadline exceeded",
+        "unavailable",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "502",
+        "503",
+        "504",
+        "read tcp",
+        "write tcp",
+        "dial tcp",
+        "temporary failure in name resolution",
+        "getaddrinfo",
+        "unexpected eof",
+        "eof reading",
+        "handshake",
+        "transport",
+        "socket error",
+        "reset by peer",
+        "resource_exhausted",
+        "rate limit",
+        "429",
+    )
+    return any(k in msg_lower for k in keywords)
 
 def setup_isolated_gemini_dir():
     cli_dir = os.path.join(LGTM_GEMINI_DIR, "antigravity-cli")
@@ -141,44 +185,78 @@ def main():
                 conn.sendall(b'{"decision": "deny", "reason": "unauthorized"}')
                 continue
 
-            # Check if child worker process is still alive, respawn if terminated
-            if proc.poll() is not None:
-                proc = spawn_agy()
-
             prompt = req.get("prompt", "")
             payload = {"event": "user", "message": {"content": prompt}}
 
-            try:
-                proc.stdin.write(json.dumps(payload) + "\n")
-                proc.stdin.flush()
-            except (BrokenPipeError, OSError):
-                # Worker died or pipe broken; respawn and retry once
-                proc = spawn_agy()
-                proc.stdin.write(json.dumps(payload) + "\n")
-                proc.stdin.flush()
-
             response = ""
-            while True:
-                line = proc.stdout.readline()
-                if not line:
-                    break
-                if "result" in line.lower() and "response" in line.lower():
+            for attempt in range(MAX_RETRIES):
+                if proc.poll() is not None:
+                    proc = spawn_agy()
+
+                try:
+                    proc.stdin.write(json.dumps(payload) + "\n")
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    proc = spawn_agy()
                     try:
-                        res = json.loads(line)
-                        result_obj = res.get("result", {})
-                        if result_obj.get("status") == "ERROR":
-                            err_msg = result_obj.get("error", "Unknown error")
-                            response = json.dumps({"decision": "deny", "reason": f"API Error: {err_msg}"})
-                        else:
-                            response = result_obj.get("response", "")
+                        proc.stdin.write(json.dumps(payload) + "\n")
+                        proc.stdin.flush()
                     except Exception:
                         pass
-                    break
 
-            if response.startswith("```json"):
-                response = response.split("```json")[1].split("```")[0].strip()
-            elif response.startswith("```"):
-                response = response.split("```")[1].split("```")[0].strip()
+                raw_response = ""
+                err_msg = ""
+                is_error = False
+
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        is_error = True
+                        err_msg = "EOF reading from agy stream"
+                        break
+                    if "result" in line.lower() and "response" in line.lower():
+                        try:
+                            res = json.loads(line)
+                            result_obj = res.get("result", {})
+                            if result_obj.get("status") == "ERROR":
+                                is_error = True
+                                err_msg = result_obj.get("error", "Unknown error")
+                            else:
+                                raw_response = result_obj.get("response", "")
+                        except Exception as parse_e:
+                            is_error = True
+                            err_msg = f"Failed to parse stream JSON: {parse_e}"
+                        break
+
+                if is_error and is_network_error(err_msg):
+                    if attempt < MAX_RETRIES - 1:
+                        try:
+                            if proc and proc.poll() is None:
+                                proc.terminate()
+                                try:
+                                    proc.wait(timeout=2)
+                                except Exception:
+                                    proc.kill()
+                        except Exception:
+                            pass
+                        kill_stale_workers()
+                        time.sleep(1.0 * (attempt + 1))
+                        proc = spawn_agy()
+                        continue
+                    else:
+                        response = json.dumps({"decision": "deny", "reason": f"API Error: {err_msg}"})
+                        break
+                elif is_error:
+                    response = json.dumps({"decision": "deny", "reason": f"API Error: {err_msg}"})
+                    break
+                else:
+                    if raw_response.startswith("```json"):
+                        response = raw_response.split("```json")[1].split("```")[0].strip()
+                    elif raw_response.startswith("```"):
+                        response = raw_response.split("```")[1].split("```")[0].strip()
+                    else:
+                        response = raw_response
+                    break
 
             conn.sendall(response.encode("utf-8"))
 
@@ -209,4 +287,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
