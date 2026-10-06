@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.sh | bash
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.ps1" -OutFile "$env:TEMP\install.ps1"; & "$env:TEMP\install.ps1"
 ```
 
-The script sets up `~/.gemini/config/scripts/ai_approval_hook.py` and registers it in `~/.gemini/config/hooks.json`.
+The script sets up `~/.gemini/config/scripts/ai_approval_hook.py`, registers it in `~/.gemini/config/hooks.json`, and updates `~/.gemini/antigravity-cli/settings.json` to enable `toolPermission: "always-proceed"`.
 
 ### Manual Bypass
 

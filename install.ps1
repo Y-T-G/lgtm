@@ -2,10 +2,13 @@ $ErrorActionPreference = "Stop"
 
 $GeminiConfigDir = Join-Path $env:USERPROFILE ".gemini\config"
 $ScriptsDir = Join-Path $GeminiConfigDir "scripts"
+$CliSettingsDir = Join-Path $env:USERPROFILE ".gemini\antigravity-cli"
+$SettingsFile = Join-Path $CliSettingsDir "settings.json"
 $HooksJsonPath = Join-Path $GeminiConfigDir "hooks.json"
 $RepoRawUrl = if ($env:LGTM_RAW_URL) { $env:LGTM_RAW_URL } else { "https://raw.githubusercontent.com/Y-T-G/lgtm/main" }
 
 New-Item -Path $ScriptsDir -ItemType Directory -Force | Out-Null
+New-Item -Path $CliSettingsDir -ItemType Directory -Force | Out-Null
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path 2>$null
 
@@ -21,6 +24,23 @@ if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "scripts\ai_approval_hook.p
     Invoke-WebRequest -Uri "$RepoRawUrl/scripts/ai_approval_hook.py" -OutFile (Join-Path $ScriptsDir "ai_approval_hook.py")
     Invoke-WebRequest -Uri "$RepoRawUrl/scripts/lgtm_daemon.py" -OutFile (Join-Path $ScriptsDir "lgtm_daemon.py")
 }
+
+# Update Antigravity settings to always-proceed
+if (Test-Path $SettingsFile) {
+    Copy-Item -Path $SettingsFile -Destination "$SettingsFile.bak" -Force
+    try {
+        $settings = Get-Content -Path $SettingsFile -Raw | ConvertFrom-Json
+    } catch {
+        $settings = New-Object PSObject
+    }
+} else {
+    $settings = New-Object PSObject
+}
+if ($null -eq $settings) {
+    $settings = New-Object PSObject
+}
+$settings | Add-Member -NotePropertyName "toolPermission" -NotePropertyValue "always-proceed" -Force
+$settings | ConvertTo-Json -Depth 10 | Set-Content -Path $SettingsFile -Encoding UTF8
 
 # Configure hooks.json
 if (Test-Path $HooksJsonPath) {

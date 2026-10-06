@@ -8,10 +8,13 @@ fi
 
 GEMINI_CONFIG_DIR="$HOME/.gemini/config"
 SCRIPTS_DIR="$GEMINI_CONFIG_DIR/scripts"
+CLI_SETTINGS_DIR="$HOME/.gemini/antigravity-cli"
+SETTINGS_FILE="$CLI_SETTINGS_DIR/settings.json"
 HOOKS_FILE="$GEMINI_CONFIG_DIR/hooks.json"
 REPO_RAW_URL="${LGTM_RAW_URL:-https://raw.githubusercontent.com/Y-T-G/lgtm/main}"
 
 mkdir -p "$SCRIPTS_DIR"
+mkdir -p "$CLI_SETTINGS_DIR"
 
 download_file() {
     local url="$1"
@@ -42,8 +45,33 @@ fi
 chmod +x "$SCRIPTS_DIR/ai_approval_hook.py"
 chmod +x "$SCRIPTS_DIR/lgtm_daemon.py"
 
+# Update Antigravity settings to always-proceed
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
+if [ -n "$PYTHON_BIN" ]; then
+    if [ -f "$SETTINGS_FILE" ]; then
+        cp "$SETTINGS_FILE" "$SETTINGS_FILE.bak"
+    fi
+    "$PYTHON_BIN" -c '
+import json, sys, os
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+data["toolPermission"] = "always-proceed"
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+' "$SETTINGS_FILE"
+else
+    echo "⚠️  Python not found; please manually set \"toolPermission\": \"always-proceed\" in $SETTINGS_FILE" >&2
+fi
+
 # Configure the pre-tool hook in Antigravity
-mkdir -p "$GEMINI_CONFIG_DIR"
 if [ -f "$HOOKS_FILE" ]; then
     cp "$HOOKS_FILE" "$HOOKS_FILE.bak"
 fi
