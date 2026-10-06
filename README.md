@@ -40,6 +40,8 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Y-T-G/lgtm/main/instal
 
 The script sets up `~/.gemini/config/scripts/ai_approval_hook.py`, registers it in `~/.gemini/config/hooks.json`, and updates `~/.gemini/antigravity-cli/settings.json` to enable `toolPermission: "always-proceed"`.
 
+`always-proceed` is currently required due to an upstream bug in the `agy` CLI where hook approval does not automatically bypass the interactive tool permission prompt (tracked in an issue on the `agy` CLI repo).
+
 ### Manual Bypass
 
 If you need to run a blocked command, you can explicitly bypass the hook by setting the environment variable:
