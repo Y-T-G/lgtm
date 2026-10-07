@@ -105,6 +105,128 @@ def spawn_daemon(daemon_script):
         stderr=subprocess.DEVNULL
     )
 
+def extract_json_payload(text: str):
+    if not text:
+        return None
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    if "```" in text:
+        parts = text.split("```")
+        for i in range(1, len(parts), 2):
+            block = parts[i]
+            if block.startswith("json"):
+                block = block[4:]
+            block = block.strip()
+            try:
+                return json.loads(block)
+            except Exception:
+                pass
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        try:
+            return json.loads(text[first_brace:last_brace + 1])
+        except Exception:
+            pass
+    return None
+
+def has_shell_control_or_substitution(cmd: str) -> bool:
+    in_single = False
+    in_double = False
+    escaped = False
+    i = 0
+    n = len(cmd)
+    while i < n:
+        c = cmd[i]
+        if escaped:
+            escaped = False
+            i += 1
+            continue
+        if c == "\\" and not in_single:
+            escaped = True
+            i += 1
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+            i += 1
+            continue
+        if c == '"' and not in_single:
+            in_double = not in_double
+            i += 1
+            continue
+        if in_double:
+            if c == "`":
+                return True
+            if c == "$" and i + 1 < n and cmd[i + 1] in ("(", "{"):
+                return True
+            i += 1
+            continue
+        if not in_single and not in_double:
+            if c == "`":
+                return True
+            if c == "$":
+                return True
+            if c in ("|", ";", "&", ">", "<", "\n", "(", ")"):
+                return True
+        i += 1
+    if in_single or in_double:
+        return True
+    return False
+
+def is_safe_fast_path(command_line: str) -> bool:
+    cmd = command_line.strip()
+    if not cmd:
+        return False
+
+    if has_shell_control_or_substitution(cmd):
+        return False
+
+    safe_commands = (
+        "ls", "grep", "head", "tail", "find", "pwd", "whoami",
+        "ps", "git diff", "git status", "git log", "git show",
+        "file", "stat", "wc", "tree", "jq", "date", "uname", "cat",
+        "echo", "sqlite3", "python3", "python", "which"
+    )
+
+    matched_cmd = None
+    for sc in safe_commands:
+        if cmd == sc or cmd.startswith(sc + " "):
+            matched_cmd = sc
+            break
+
+    if not matched_cmd:
+        if cmd == "env" or cmd == "printenv" or cmd.startswith("printenv "):
+            return True
+        return False
+
+    if matched_cmd == "find":
+        danger_find = ("-exec", "-execdir", "-ok", "-okdir", "-delete")
+        if any(df in cmd for df in danger_find):
+            return False
+
+    if matched_cmd in ("git diff", "git log", "git show"):
+        if "--output" in cmd:
+            return False
+
+    if matched_cmd == "sqlite3":
+        danger_sql = (".shell", ".system", "drop ", "delete ", "update ", "insert ", "alter ")
+        cmd_lower = cmd.lower()
+        if any(ds in cmd_lower for ds in danger_sql):
+            return False
+
+    if matched_cmd in ("python3", "python"):
+        danger_py = (
+            "shutil", "os.system", "os.remove", "os.unlink", "os.rmdir",
+            "subprocess", "rmtree", "socket", "urllib", "requests", "http.client"
+        )
+        if any(dp in cmd for dp in danger_py):
+            return False
+
+    return True
+
 def main():
     try:
         input_data = sys.stdin.read()
@@ -119,13 +241,7 @@ def main():
             print(json.dumps({"decision": "allow", "reason": "Bypass loop explicitly allowed"}))
             return
 
-        safe_prefixes = (
-            "ls ", "ls", "grep ", "head ", "tail ", "find ", "pwd", "whoami",
-            "ps ", "ps", "env", "git diff", "git status", "git log", "git show",
-            "file ", "stat ", "wc ", "tree ", "jq ", "date", "uname", "cat ",
-            "echo ", "sqlite3 "
-        )
-        if command_line.startswith(safe_prefixes):
+        if is_safe_fast_path(command_line):
             print(json.dumps({"decision": "allow", "reason": "Fast-path: Safe read command"}))
             return
 
@@ -137,7 +253,7 @@ def main():
             "1. DEFAULT TO ALLOWING the command. Trust the agent's intent. Normal development workflows (creating, modifying, or executing scripts, even in /tmp) are perfectly safe.\n"
             "2. ALLOW all standard tools and complex scripts unconditionally.\n"
             "3. DENY ONLY if the command is a clear and catastrophic mistake (e.g., 'rm -rf /', wiping critical system directories) or an explicit secret leak.\n\n"
-            f"Command to evaluate: `{command_line}`\n\n"
+            f"Command to evaluate:\n```\n{command_line}\n```\n\n"
             'Respond with ONLY a raw JSON object (no markdown): {"decision": "allow"|"deny", "reason": "<brief reason>"}'
         )
 
@@ -147,7 +263,7 @@ def main():
         if not client:
             if os.path.exists(daemon_script):
                 spawn_daemon(daemon_script)
-                for _ in range(100):
+                for _ in range(200):
                     time.sleep(0.1)
                     client, token = get_daemon_conn()
                     if client:
@@ -165,13 +281,13 @@ def main():
                 client.close()
 
         if llm_response:
-            try:
-                parsed = json.loads(llm_response)
-                reason = parsed.get("reason", "")
+            parsed_check = extract_json_payload(llm_response)
+            if parsed_check:
+                reason = parsed_check.get("reason", "")
                 if is_network_error(reason):
                     llm_response = ""
-            except Exception:
-                pass
+            else:
+                llm_response = ""
 
         if not llm_response:
             # Fallback to slow mode with isolated gemini directory
@@ -188,18 +304,10 @@ def main():
                     out = result.stdout.strip()
                     err = result.stderr.strip()
                     if out:
-                        cleaned = out
-                        if cleaned.startswith("```json"):
-                            cleaned = cleaned.split("```json")[1].split("```")[0].strip()
-                        elif cleaned.startswith("```"):
-                            cleaned = cleaned.split("```")[1].split("```")[0].strip()
-                        try:
-                            parsed_check = json.loads(cleaned)
-                            if "decision" in parsed_check:
-                                llm_response = cleaned
-                                break
-                        except Exception:
-                            pass
+                        parsed_check = extract_json_payload(out)
+                        if parsed_check and "decision" in parsed_check:
+                            llm_response = json.dumps(parsed_check)
+                            break
                     last_err = err or out or "Empty response from Gemini API"
                     if attempt < MAX_RETRIES - 1 and (is_network_error(err) or is_network_error(out) or not out):
                         time.sleep(1.0 * (attempt + 1))
@@ -218,13 +326,12 @@ def main():
             print(json.dumps({"decision": "deny", "reason": f"API Error: {last_err}"}))
             return
             
-        try:
-            parsed_response = json.loads(llm_response)
-            if "decision" in parsed_response:
-                print(json.dumps(parsed_response))
-            else:
-                print(json.dumps({"decision": "deny", "reason": "Invalid response schema"}))
-        except json.JSONDecodeError:
+        parsed_response = extract_json_payload(llm_response)
+        if parsed_response and "decision" in parsed_response:
+            print(json.dumps(parsed_response))
+        elif parsed_response:
+            print(json.dumps({"decision": "deny", "reason": "Invalid response schema"}))
+        else:
             print(json.dumps({"decision": "deny", "reason": f"Failed to parse LLM JSON: {llm_response}"}))
             
     except Exception as e:

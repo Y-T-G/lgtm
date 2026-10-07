@@ -58,6 +58,34 @@ def is_network_error(msg: str) -> bool:
     )
     return any(k in msg_lower for k in keywords)
 
+def extract_json_payload(text: str):
+    if not text:
+        return None
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    if "```" in text:
+        parts = text.split("```")
+        for i in range(1, len(parts), 2):
+            block = parts[i]
+            if block.startswith("json"):
+                block = block[4:]
+            block = block.strip()
+            try:
+                return json.loads(block)
+            except Exception:
+                pass
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        try:
+            return json.loads(text[first_brace:last_brace + 1])
+        except Exception:
+            pass
+    return None
+
 def setup_isolated_gemini_dir():
     cli_dir = os.path.join(LGTM_GEMINI_DIR, "antigravity-cli")
     os.makedirs(cli_dir, exist_ok=True)
@@ -250,10 +278,9 @@ def main():
                     response = json.dumps({"decision": "deny", "reason": f"API Error: {err_msg}"})
                     break
                 else:
-                    if raw_response.startswith("```json"):
-                        response = raw_response.split("```json")[1].split("```")[0].strip()
-                    elif raw_response.startswith("```"):
-                        response = raw_response.split("```")[1].split("```")[0].strip()
+                    parsed_obj = extract_json_payload(raw_response)
+                    if parsed_obj is not None:
+                        response = json.dumps(parsed_obj)
                     else:
                         response = raw_response
                     break
