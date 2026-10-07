@@ -52,6 +52,29 @@ AGY_HOOK_BYPASS=1 rm -rf build/
 
 The hook reads this variable and allows the command instantly.
 
+## Testing
+
+Run the built-in test suite to verify that the security hook correctly blocks destructive actions, command injections, and secret exfiltration:
+
+```bash
+python3 test.py
+# or
+./test.sh
+```
+
+To test an individual command:
+
+```bash
+python3 test.py --cmd "rm -rf /"
+```
+
+To test the globally installed configuration (`~/.gemini/config/scripts/ai_approval_hook.py`):
+
+```bash
+python3 test.py --installed
+```
+
 ## License
 
 MIT
+
