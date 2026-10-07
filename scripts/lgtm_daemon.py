@@ -242,19 +242,18 @@ def main():
                         is_error = True
                         err_msg = "EOF reading from agy stream"
                         break
-                    if "result" in line.lower() and "response" in line.lower():
-                        try:
-                            res = json.loads(line)
+                    try:
+                        res = json.loads(line)
+                        if res.get("event") == "result":
                             result_obj = res.get("result", {})
                             if result_obj.get("status") == "ERROR":
                                 is_error = True
                                 err_msg = result_obj.get("error", "Unknown error")
                             else:
                                 raw_response = result_obj.get("response", "")
-                        except Exception as parse_e:
-                            is_error = True
-                            err_msg = f"Failed to parse stream JSON: {parse_e}"
-                        break
+                            break
+                    except Exception:
+                        pass
 
                 if is_error and is_network_error(err_msg):
                     if attempt < MAX_RETRIES - 1:

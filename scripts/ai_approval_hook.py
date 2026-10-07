@@ -88,7 +88,7 @@ def get_daemon_conn():
         port_str, token = content.split(":", 1)
         port = int(port_str)
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.settimeout(30.0)
+        client.settimeout(28.0)
         client.connect(("127.0.0.1", port))
         return client, token
     except Exception:
@@ -297,22 +297,42 @@ def main():
             last_err = "Empty response from Gemini API"
             for attempt in range(MAX_RETRIES):
                 try:
+                    stream_input = json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
                     result = subprocess.run(
-                        ["agy", f"--gemini_dir={LGTM_GEMINI_DIR}", "-p", prompt, "--model", "gemini-3.8-flash-low"],
+                        [
+                            "agy",
+                            f"--gemini_dir={LGTM_GEMINI_DIR}",
+                            "--input-format", "stream-json",
+                            "--output-format", "stream-json",
+                            "--model", "gemini-3.8-flash-low"
+                        ],
+                        input=stream_input,
                         capture_output=True, text=True, env=eval_env, cwd=tempfile.gettempdir(), timeout=20
                     )
                     out = result.stdout.strip()
                     err = result.stderr.strip()
                     if out:
-                        parsed_check = extract_json_payload(out)
-                        if parsed_check and "decision" in parsed_check:
-                            llm_response = json.dumps(parsed_check)
+                        for line in out.splitlines():
+                            try:
+                                res = json.loads(line)
+                                if res.get("event") == "result":
+                                    result_obj = res.get("result", {})
+                                    if result_obj.get("status") != "ERROR":
+                                        raw_resp = result_obj.get("response", "")
+                                        parsed_check = extract_json_payload(raw_resp)
+                                        if parsed_check and "decision" in parsed_check:
+                                            llm_response = json.dumps(parsed_check)
+                                            break
+                                    else:
+                                        err = result_obj.get("error", "Unknown error")
+                            except Exception:
+                                pass
+                        if llm_response:
                             break
                     last_err = err or out or "Empty response from Gemini API"
                     if attempt < MAX_RETRIES - 1 and (is_network_error(err) or is_network_error(out) or not out):
                         time.sleep(1.0 * (attempt + 1))
                         continue
-                    llm_response = out
                 except subprocess.TimeoutExpired:
                     last_err = "Command timed out"
                     if attempt < MAX_RETRIES - 1:
