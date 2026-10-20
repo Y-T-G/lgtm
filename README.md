@@ -17,6 +17,15 @@
 - **Auto-fallback.** If the Gemini API is rate limited or times out, the hook falls back to a slow standalone process.
 - **Token limit protection.** The background daemon restarts every 20 evaluations to prevent its context window from growing indefinitely.
 
+## Why LGTM vs. Built-in Auto Mode
+
+Antigravity CLI includes a built-in Auto mode (`--mode auto`), but `lgtm` provides several advantages:
+
+- **Universal Platform Support**: Native Auto mode requires an OS-level terminal sandbox (Seatbelt on macOS, user namespaces on Linux, or ZeroG microVMs). On Android/Termux, WSL, or systems where container namespaces are restricted, native Auto mode is disabled. `lgtm` runs purely in user space anywhere `agy` and Python run.
+- **No Account Entitlement Restrictions**: Native Auto mode is server-side gated by Google account tier. `lgtm` works across any standard Google account.
+- **Sub-100ms Fast-Path**: Common inspection and read commands (`ls`, `git status`, `cat`, `grep`, etc.) resolve locally in Python in ~0.10s without network latency or LLM token overhead.
+- **Customizable Safety Policy**: Fast-path commands, blacklisted tokens, and review criteria are fully configurable in `lgtm_hook.py`.
+
 ## Architecture
 
 The system uses two components:
