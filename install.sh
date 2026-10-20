@@ -30,19 +30,19 @@ download_file() {
 }
 
 # Copy or download the AI approval hook and daemon
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/scripts/ai_approval_hook.py" ]; then
-    cp "$SCRIPT_DIR/scripts/ai_approval_hook.py" "$SCRIPTS_DIR/"
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/scripts/lgtm_hook.py" ]; then
+    cp "$SCRIPT_DIR/scripts/lgtm_hook.py" "$SCRIPTS_DIR/"
     cp "$SCRIPT_DIR/scripts/lgtm_daemon.py" "$SCRIPTS_DIR/"
-elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/ai_approval_hook.py" ]; then
-    cp "$SCRIPT_DIR/ai_approval_hook.py" "$SCRIPTS_DIR/"
+elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/lgtm_hook.py" ]; then
+    cp "$SCRIPT_DIR/lgtm_hook.py" "$SCRIPTS_DIR/"
     cp "$SCRIPT_DIR/lgtm_daemon.py" "$SCRIPTS_DIR/"
 else
     echo "Downloading LGTM scripts..."
-    download_file "$REPO_RAW_URL/scripts/ai_approval_hook.py" "$SCRIPTS_DIR/ai_approval_hook.py"
+    download_file "$REPO_RAW_URL/scripts/lgtm_hook.py" "$SCRIPTS_DIR/lgtm_hook.py"
     download_file "$REPO_RAW_URL/scripts/lgtm_daemon.py" "$SCRIPTS_DIR/lgtm_daemon.py"
 fi
 
-chmod +x "$SCRIPTS_DIR/ai_approval_hook.py"
+chmod +x "$SCRIPTS_DIR/lgtm_hook.py"
 chmod +x "$SCRIPTS_DIR/lgtm_daemon.py"
 
 # Update Antigravity settings to always-proceed
@@ -78,14 +78,14 @@ fi
 
 cat << 'EOF' > "$HOOKS_FILE"
 {
-  "ai-approval-hook": {
+  "lgtm-hook": {
     "PreToolUse": [
       {
         "matcher": "run_command",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ./scripts/ai_approval_hook.py",
+            "command": "python3 ./scripts/lgtm_hook.py",
             "timeout": 45
           }
         ]

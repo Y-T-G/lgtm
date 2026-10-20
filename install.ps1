@@ -13,15 +13,15 @@ New-Item -Path $CliSettingsDir -ItemType Directory -Force | Out-Null
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path 2>$null
 
 # Copy or download the AI approval hook and daemon
-if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "scripts\ai_approval_hook.py"))) {
-    Copy-Item -Path (Join-Path $ScriptDir "scripts\ai_approval_hook.py") -Destination (Join-Path $ScriptsDir "ai_approval_hook.py") -Force
+if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "scripts\lgtm_hook.py"))) {
+    Copy-Item -Path (Join-Path $ScriptDir "scripts\lgtm_hook.py") -Destination (Join-Path $ScriptsDir "lgtm_hook.py") -Force
     Copy-Item -Path (Join-Path $ScriptDir "scripts\lgtm_daemon.py") -Destination (Join-Path $ScriptsDir "lgtm_daemon.py") -Force
-} elseif ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "ai_approval_hook.py"))) {
-    Copy-Item -Path (Join-Path $ScriptDir "ai_approval_hook.py") -Destination (Join-Path $ScriptsDir "ai_approval_hook.py") -Force
+} elseif ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "lgtm_hook.py"))) {
+    Copy-Item -Path (Join-Path $ScriptDir "lgtm_hook.py") -Destination (Join-Path $ScriptsDir "lgtm_hook.py") -Force
     Copy-Item -Path (Join-Path $ScriptDir "lgtm_daemon.py") -Destination (Join-Path $ScriptsDir "lgtm_daemon.py") -Force
 } else {
     Write-Host "Downloading LGTM scripts..."
-    Invoke-WebRequest -Uri "$RepoRawUrl/scripts/ai_approval_hook.py" -OutFile (Join-Path $ScriptsDir "ai_approval_hook.py")
+    Invoke-WebRequest -Uri "$RepoRawUrl/scripts/lgtm_hook.py" -OutFile (Join-Path $ScriptsDir "lgtm_hook.py")
     Invoke-WebRequest -Uri "$RepoRawUrl/scripts/lgtm_daemon.py" -OutFile (Join-Path $ScriptsDir "lgtm_daemon.py")
 }
 
@@ -49,14 +49,14 @@ if (Test-Path $HooksJsonPath) {
 
 $HooksJsonCode = @"
 {
-  "ai-approval-hook": {
+  "lgtm-hook": {
     "PreToolUse": [
       {
         "matcher": "run_command",
         "hooks": [
           {
             "type": "command",
-            "command": "python ./scripts/ai_approval_hook.py",
+            "command": "python ./scripts/lgtm_hook.py",
             "timeout": 45
           }
         ]

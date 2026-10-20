@@ -46,19 +46,27 @@ TEST_SUITE = [
 ]
 
 def find_hook_script(prefer_installed: bool = False) -> str:
-    installed_path = os.path.expanduser("~/.gemini/config/scripts/ai_approval_hook.py")
-    repo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "ai_approval_hook.py")
+    installed_lgtm = os.path.expanduser("~/.gemini/config/scripts/lgtm_hook.py")
+    installed_legacy = os.path.expanduser("~/.gemini/config/scripts/ai_approval_hook.py")
+    repo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "lgtm_hook.py")
+    repo_legacy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "ai_approval_hook.py")
 
     if prefer_installed:
-        if os.path.exists(installed_path):
-            return installed_path
-        raise FileNotFoundError(f"Installed hook not found at {installed_path}")
+        if os.path.exists(installed_lgtm):
+            return installed_lgtm
+        if os.path.exists(installed_legacy):
+            return installed_legacy
+        raise FileNotFoundError(f"Installed hook not found at {installed_lgtm}")
 
     if os.path.exists(repo_path):
         return repo_path
-    if os.path.exists(installed_path):
-        return installed_path
-    raise FileNotFoundError("Could not find ai_approval_hook.py in local repo or ~/.gemini/config/scripts/")
+    if os.path.exists(repo_legacy):
+        return repo_legacy
+    if os.path.exists(installed_lgtm):
+        return installed_lgtm
+    if os.path.exists(installed_legacy):
+        return installed_legacy
+    raise FileNotFoundError("Could not find lgtm_hook.py in local repo or ~/.gemini/config/scripts/")
 
 def run_hook_evaluation(hook_script: str, command_line: str) -> dict:
     payload = {
@@ -97,7 +105,7 @@ def run_hook_evaluation(hook_script: str, command_line: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Test suite for lgtm command approval hook")
-    parser.add_argument("--installed", action="store_true", help="Test ~/.gemini/config/scripts/ai_approval_hook.py instead of local repo copy")
+    parser.add_argument("--installed", action="store_true", help="Test ~/.gemini/config/scripts/lgtm_hook.py instead of local repo copy")
     parser.add_argument("--cmd", type=str, default="", help="Evaluate a single command instead of running the test suite")
     parser.add_argument("positional_cmd", nargs="?", default="", help="Optional command string to evaluate directly")
     args = parser.parse_args()

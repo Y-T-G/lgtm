@@ -21,7 +21,7 @@
 
 The system uses two components:
 
-1. **The pre-tool hook** (`ai_approval_hook.py`): Antigravity calls this script before running a command. It checks the fast-path list. If the command is not on the list, it connects to a local Unix socket.
+1. **The pre-tool hook** (`lgtm_hook.py`): Antigravity calls this script before running a command. It checks the fast-path list. If the command is not on the list, it connects to a local Unix socket.
 2. **The background daemon** (`lgtm_daemon.py`): The hook spawns this daemon if it is not running. The daemon keeps an `agy` instance alive, receives prompts over the socket, feeds them into the `agy` stream, and returns the LLM's decision.
 
 ## Install
@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.sh | bash
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.ps1" -OutFile "$env:TEMP\install.ps1"; & "$env:TEMP\install.ps1"
 ```
 
-The script sets up `~/.gemini/config/scripts/ai_approval_hook.py`, registers it in `~/.gemini/config/hooks.json`, and updates `~/.gemini/antigravity-cli/settings.json` to enable `toolPermission: "always-proceed"`.
+The script sets up `~/.gemini/config/scripts/lgtm_hook.py`, registers it in `~/.gemini/config/hooks.json`, and updates `~/.gemini/antigravity-cli/settings.json` to enable `toolPermission: "always-proceed"`.
 
 `always-proceed` is currently required due to an upstream bug in the `agy` CLI where hook approval does not automatically bypass the interactive tool permission prompt (tracked in [google-antigravity/antigravity-cli#1059](https://github.com/google-antigravity/antigravity-cli/issues/1059)).
 
@@ -68,7 +68,7 @@ To test an individual command:
 python3 test.py --cmd "rm -rf /"
 ```
 
-To test the globally installed configuration (`~/.gemini/config/scripts/ai_approval_hook.py`):
+To test the globally installed configuration (`~/.gemini/config/scripts/lgtm_hook.py`):
 
 ```bash
 python3 test.py --installed
