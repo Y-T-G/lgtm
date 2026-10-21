@@ -40,7 +40,8 @@ if ($null -eq $settings) {
     $settings = New-Object PSObject
 }
 $settings | Add-Member -NotePropertyName "toolPermission" -NotePropertyValue "always-proceed" -Force
-$settings | ConvertTo-Json -Depth 10 | Set-Content -Path $SettingsFile -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($SettingsFile, ($settings | ConvertTo-Json -Depth 10), $utf8NoBom)
 
 # Configure hooks.json
 if (Test-Path $HooksJsonPath) {
@@ -66,6 +67,6 @@ $HooksJsonCode = @"
 }
 "@
 
-Set-Content -Path $HooksJsonPath -Value $HooksJsonCode -Encoding UTF8
+[System.IO.File]::WriteAllText($HooksJsonPath, $HooksJsonCode, $utf8NoBom)
 
 Write-Host "✅ LGTM installed! All run_command tool calls will now be evaluated by the LLM." -ForegroundColor Green
