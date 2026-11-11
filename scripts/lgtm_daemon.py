@@ -128,6 +128,18 @@ def kill_other_daemons():
         except Exception:
             pass
 
+def reset_conversation_state():
+    cli_dir = os.path.join(LGTM_GEMINI_DIR, "antigravity-cli")
+    conv_dir = os.path.join(cli_dir, "conversations")
+    shutil.rmtree(conv_dir, ignore_errors=True)
+    for name in ("conversation_summaries.db", "conversation_summaries.db-shm", "conversation_summaries.db-wal", "jetbox_summaries_proto.pb"):
+        p = os.path.join(cli_dir, name)
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
 def spawn_agy():
     setup_isolated_gemini_dir()
     kill_stale_workers()
@@ -137,6 +149,7 @@ def spawn_agy():
         [
             "agy",
             f"--gemini_dir={LGTM_GEMINI_DIR}",
+            "--disable-slash-commands",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--model", "gemini-3.8-flash-low"
@@ -285,6 +298,11 @@ def main():
                     break
 
             conn.sendall(response.encode("utf-8"))
+            try:
+                conn.close()
+                conn = None
+            except Exception:
+                pass
 
             count += 1
             if count >= 20:
@@ -294,7 +312,7 @@ def main():
                 except Exception:
                     proc.kill()
                 kill_stale_workers()
-                shutil.rmtree(LGTM_GEMINI_DIR, ignore_errors=True)
+                reset_conversation_state()
                 proc = spawn_agy()
                 count = 0
 

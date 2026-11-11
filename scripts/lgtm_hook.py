@@ -2,12 +2,14 @@
 import sys
 import json
 import os
+import re
 import subprocess
 import socket
 import time
 import tempfile
 import getpass
 import shutil
+import urllib.request
 
 USER = getpass.getuser()
 PORT_FILE = os.path.join(tempfile.gettempdir(), f"lgtm_daemon_{USER}.port")
@@ -133,62 +135,147 @@ def extract_json_payload(text: str):
             pass
     return None
 
-def has_shell_control_or_substitution(cmd: str) -> bool:
+SENSITIVE_PATTERNS = (
+    "antigravity-oauth-token",
+    ".ssh/id_",
+    ".ssh/authorized_keys",
+    ".aws/credentials",
+    ".config/gcloud/credentials",
+    "/etc/shadow",
+    "/etc/sudoers",
+    "aws_secret_access_key",
+)
+
+SAFE_REDIRECT_RE = re.compile(
+    r"(?:\b[12]?>>?\s*/dev/null\b|&>>?\s*/dev/null\b|\b2>&1\b|\b1>&2\b)"
+)
+
+OBVIOUS_DENY_PATTERNS = (
+    (
+        re.compile(
+            r"(?:^|[;&|]\s*|\b(?:sudo|env)\s+)rm\s+.*(?:-[a-zA-Z]*[rf][a-zA-Z]*|--recursive|--no-preserve-root).*"
+            r"(?:\s+/(?:\s|$|[;&|])|\s+/\*|\s+/(?:system|data|etc|boot|usr|var|proc|sys|dev)(?:/|\s|$|[;&|]))"
+        ),
+        "Fast-deny: Catastrophic filesystem deletion",
+    ),
+    (
+        re.compile(r"\bdd\b.*\bof=/dev/(?:block|sd|nvme|mmcblk|vd|hd|loop)"),
+        "Fast-deny: Raw block device overwrite",
+    ),
+    (
+        re.compile(r"\bmkfs(?:\.[a-zA-Z0-9]+)?\s+/dev/"),
+        "Fast-deny: Partition format",
+    ),
+    (
+        re.compile(r"\bfind\s+/(?:\s+|$).*(?:-delete\b|-exec(?:dir)?\s+rm\b)"),
+        "Fast-deny: Destructive root find operation",
+    ),
+    (
+        re.compile(r">{1,2}\s*/etc/(?:passwd|shadow|sudoers|hosts\.allow)\b"),
+        "Fast-deny: Critical system file overwrite",
+    ),
+)
+
+def check_fast_deny(command_line: str):
+    cmd = command_line.strip()
+    if not cmd:
+        return None
+    cmd_lower = cmd.lower()
+    for regex, reason in OBVIOUS_DENY_PATTERNS:
+        if regex.search(cmd_lower):
+            return reason
+    if any(sp in cmd_lower for sp in SENSITIVE_PATTERNS):
+        if re.search(r"\b(?:curl|wget|nc|ncat|netcat|ssh|scp|rsync)\b", cmd_lower):
+            return "Fast-deny: Potential credential exfiltration over network"
+    return None
+
+def split_compound_command(cmd: str):
+    """Split command on top-level |, &&, ||, ; while rejecting substitutions and unsafe redirects."""
+    cleaned = SAFE_REDIRECT_RE.sub(" ", cmd)
     in_single = False
     in_double = False
     escaped = False
     i = 0
-    n = len(cmd)
+    n = len(cleaned)
+    segments = []
+    cur = []
+
     while i < n:
-        c = cmd[i]
+        c = cleaned[i]
         if escaped:
+            cur.append(c)
             escaped = False
             i += 1
             continue
         if c == "\\" and not in_single:
+            cur.append(c)
             escaped = True
             i += 1
             continue
         if c == "'" and not in_double:
             in_single = not in_single
+            cur.append(c)
             i += 1
             continue
         if c == '"' and not in_single:
             in_double = not in_double
+            cur.append(c)
             i += 1
             continue
         if in_double:
             if c == "`":
-                return True
-            if c == "$" and i + 1 < n and cmd[i + 1] in ("(", "{"):
-                return True
+                return None
+            if c == "$" and i + 1 < n and cleaned[i + 1] in ("(", "{"):
+                return None
+            cur.append(c)
             i += 1
             continue
         if not in_single and not in_double:
-            if c == "`":
-                return True
-            if c == "$":
-                return True
-            if c in ("|", ";", "&", ">", "<", "\n", "(", ")"):
-                return True
+            if c in ("`", "$", ">", "<", "\n", "(", ")"):
+                return None
+            if c == ";":
+                segments.append("".join(cur).strip())
+                cur = []
+                i += 1
+                continue
+            if c in ("|", "&"):
+                if i + 1 < n and cleaned[i + 1] == c:
+                    segments.append("".join(cur).strip())
+                    cur = []
+                    i += 2
+                    continue
+                elif c == "|":
+                    segments.append("".join(cur).strip())
+                    cur = []
+                    i += 1
+                    continue
+                else:
+                    return None
+        cur.append(c)
         i += 1
-    if in_single or in_double:
-        return True
-    return False
 
-def is_safe_fast_path(command_line: str) -> bool:
-    cmd = command_line.strip()
+    if in_single or in_double or escaped:
+        return None
+    segments.append("".join(cur).strip())
+    return [s for s in segments if s]
+
+def is_safe_segment(cmd: str) -> bool:
+    cmd = cmd.strip()
     if not cmd:
         return False
 
-    if has_shell_control_or_substitution(cmd):
+    cmd_lower = cmd.lower()
+    if any(sp in cmd_lower for sp in SENSITIVE_PATTERNS):
         return False
 
     safe_commands = (
-        "ls", "grep", "head", "tail", "find", "pwd", "whoami",
-        "ps", "git diff", "git status", "git log", "git show",
+        "ls", "grep", "rg", "egrep", "fgrep", "head", "tail", "find", "fd",
+        "pwd", "whoami", "id", "ps", "pgrep", "git diff", "git status",
+        "git log", "git show", "git branch", "git rev-parse", "git remote",
         "file", "stat", "wc", "tree", "jq", "date", "uname", "cat",
-        "echo", "sqlite3", "python3", "python", "which"
+        "echo", "printf", "sqlite3", "python3", "python", "which", "type",
+        "realpath", "readlink", "dirname", "basename", "sort", "uniq",
+        "cut", "tr", "diff", "du", "df", "free", "uptime", "true", "false", "cd"
     )
 
     matched_cmd = None
@@ -203,29 +290,93 @@ def is_safe_fast_path(command_line: str) -> bool:
         return False
 
     if matched_cmd == "find":
-        danger_find = ("-exec", "-execdir", "-ok", "-okdir", "-delete")
+        danger_find = ("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fls")
         if any(df in cmd for df in danger_find):
             return False
 
-    if matched_cmd in ("git diff", "git log", "git show"):
-        if "--output" in cmd:
+    if matched_cmd == "sort":
+        if " -o " in cmd or cmd.endswith(" -o") or "--output" in cmd:
+            return False
+
+    if matched_cmd in ("git diff", "git log", "git show", "git branch", "git remote"):
+        if "--output" in cmd or " -d " in cmd or " -D " in cmd or "--delete" in cmd or " set-url " in cmd or " add " in cmd or " remove " in cmd:
             return False
 
     if matched_cmd == "sqlite3":
-        danger_sql = (".shell", ".system", "drop ", "delete ", "update ", "insert ", "alter ")
-        cmd_lower = cmd.lower()
+        danger_sql = (".shell", ".system", ".output", ".once", "drop ", "delete ", "update ", "insert ", "alter ", "attach ")
         if any(ds in cmd_lower for ds in danger_sql):
             return False
 
     if matched_cmd in ("python3", "python"):
         danger_py = (
-            "shutil", "os.system", "os.remove", "os.unlink", "os.rmdir",
-            "subprocess", "rmtree", "socket", "urllib", "requests", "http.client"
+            "shutil", "os.system", "os.remove", "os.unlink", "os.rmdir", "os.popen",
+            "subprocess", "rmtree", "socket", "urllib", "requests", "http.client",
+            "pathlib", "open(", "write("
         )
         if any(dp in cmd for dp in danger_py):
             return False
 
     return True
+
+def is_safe_fast_path(command_line: str) -> bool:
+    cmd = command_line.strip()
+    if not cmd:
+        return False
+    segments = split_compound_command(cmd)
+    if not segments:
+        return False
+    return all(is_safe_segment(seg) for seg in segments)
+
+def evaluate_via_free_api_key(prompt: str) -> str:
+    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if groq_key:
+        try:
+            req = urllib.request.Request(
+                "https://api.groq.com/openai/v1/chat/completions",
+                data=json.dumps({
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.0,
+                    "max_tokens": 64,
+                    "response_format": {"type": "json_object"}
+                }).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "lgtm/1.0"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data["choices"][0]["message"]["content"].strip()
+        except Exception:
+            pass
+
+    gemini_key = (os.environ.get("LGTM_GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY") or "").strip()
+    if gemini_key:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={gemini_key}"
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.0,
+                        "maxOutputTokens": 64,
+                        "responseMimeType": "application/json",
+                        "thinkingConfig": {"thinkingBudget": 0}
+                    }
+                }).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                return "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+        except Exception:
+            pass
+
+    return ""
 
 def main():
     try:
@@ -239,6 +390,11 @@ def main():
 
         if os.environ.get("AGY_HOOK_BYPASS") == "1":
             print(json.dumps({"decision": "allow", "reason": "Bypass loop explicitly allowed"}))
+            return
+
+        fast_deny_reason = check_fast_deny(command_line)
+        if fast_deny_reason:
+            print(json.dumps({"decision": "deny", "reason": fast_deny_reason}))
             return
 
         if is_safe_fast_path(command_line):
@@ -257,28 +413,30 @@ def main():
             'Respond with ONLY a raw JSON object (no markdown): {"decision": "allow"|"deny", "reason": "<brief reason>"}'
         )
 
+        llm_response = evaluate_via_free_api_key(prompt)
+
         daemon_script = os.path.join(os.path.dirname(__file__), "lgtm_daemon.py")
         
-        client, token = get_daemon_conn()
-        if not client:
-            if os.path.exists(daemon_script):
-                spawn_daemon(daemon_script)
-                for _ in range(200):
-                    time.sleep(0.1)
-                    client, token = get_daemon_conn()
-                    if client:
-                        break
+        if not llm_response:
+            client, token = get_daemon_conn()
+            if not client:
+                if os.path.exists(daemon_script):
+                    spawn_daemon(daemon_script)
+                    for _ in range(400):
+                        time.sleep(0.05)
+                        client, token = get_daemon_conn()
+                        if client:
+                            break
 
-        llm_response = ""
-        if client and token:
-            try:
-                msg = json.dumps({"token": token, "prompt": prompt})
-                client.sendall(msg.encode("utf-8"))
-                llm_response = client.recv(65536).decode("utf-8").strip()
-            except Exception:
-                llm_response = ""
-            finally:
-                client.close()
+            if client and token:
+                try:
+                    msg = json.dumps({"token": token, "prompt": prompt})
+                    client.sendall(msg.encode("utf-8"))
+                    llm_response = client.recv(65536).decode("utf-8").strip()
+                except Exception:
+                    llm_response = ""
+                finally:
+                    client.close()
 
         if llm_response:
             parsed_check = extract_json_payload(llm_response)
@@ -302,6 +460,7 @@ def main():
                         [
                             "agy",
                             f"--gemini_dir={LGTM_GEMINI_DIR}",
+                            "--disable-slash-commands",
                             "--input-format", "stream-json",
                             "--output-format", "stream-json",
                             "--model", "gemini-3.8-flash-low"

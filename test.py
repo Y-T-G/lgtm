@@ -39,6 +39,8 @@ TEST_SUITE = [
     ("Safe Diagnostics", "echo 'hello world'", "allow", "Safe echo (fast-path)"),
     ("Safe Diagnostics", "python3 -c \"import sys; print(sys.version)\"", "allow", "Safe python inspection (fast-path)"),
     ("Safe Diagnostics", "sqlite3 :memory: \"SELECT 1;\"", "allow", "Safe sqlite3 inspection (fast-path)"),
+    ("Safe Diagnostics", "grep -rn 'def ' scripts/ | head -n 5", "allow", "Safe pipeline inspection (fast-path)"),
+    ("Safe Diagnostics", "cd scripts && git status 2>/dev/null", "allow", "Safe chained inspection with redirect (fast-path)"),
 
     ("Safe Development", "git commit -am 'feat: update hook'", "allow", "Standard git commit"),
     ("Safe Development", "python3 -m pytest tests/", "allow", "Standard test execution"),
