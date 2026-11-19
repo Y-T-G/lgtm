@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
+ENABLE_STATUSLINE="${LGTM_STATUSLINE:-1}"
+for arg in "$@"; do
+    case "$arg" in
+        --no-statusline) ENABLE_STATUSLINE=0 ;;
+    esac
+done
+
 SCRIPT_DIR=""
 if [ -n "${BASH_SOURCE[0]}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
@@ -29,25 +36,29 @@ download_file() {
     fi
 }
 
-# Copy or download the AI approval hook and daemon
+# Copy or download the AI approval hook, daemon, and statusline helper
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/scripts/lgtm_hook.py" ]; then
     if [ "$SCRIPT_DIR/scripts" != "$SCRIPTS_DIR" ]; then
         cp "$SCRIPT_DIR/scripts/lgtm_hook.py" "$SCRIPTS_DIR/"
         cp "$SCRIPT_DIR/scripts/lgtm_daemon.py" "$SCRIPTS_DIR/"
+        cp "$SCRIPT_DIR/scripts/lgtm_status.py" "$SCRIPTS_DIR/"
     fi
 elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/lgtm_hook.py" ]; then
     if [ "$SCRIPT_DIR" != "$SCRIPTS_DIR" ]; then
         cp "$SCRIPT_DIR/lgtm_hook.py" "$SCRIPTS_DIR/"
         cp "$SCRIPT_DIR/lgtm_daemon.py" "$SCRIPTS_DIR/"
+        cp "$SCRIPT_DIR/lgtm_status.py" "$SCRIPTS_DIR/"
     fi
 else
     echo "Downloading LGTM scripts..."
     download_file "$REPO_RAW_URL/scripts/lgtm_hook.py" "$SCRIPTS_DIR/lgtm_hook.py"
     download_file "$REPO_RAW_URL/scripts/lgtm_daemon.py" "$SCRIPTS_DIR/lgtm_daemon.py"
+    download_file "$REPO_RAW_URL/scripts/lgtm_status.py" "$SCRIPTS_DIR/lgtm_status.py"
 fi
 
 chmod +x "$SCRIPTS_DIR/lgtm_hook.py"
 chmod +x "$SCRIPTS_DIR/lgtm_daemon.py"
+chmod +x "$SCRIPTS_DIR/lgtm_status.py"
 
 # Update Antigravity settings and merge hook configuration
 PYTHON_BIN="$(command -v python3 || command -v python || true)"
@@ -62,7 +73,7 @@ if [ -n "$PYTHON_BIN" ]; then
     "$PYTHON_BIN" -c '
 import json, sys, os, signal, tempfile, getpass
 
-settings_path, hooks_path, py_cmd = sys.argv[1], sys.argv[2], sys.argv[3]
+settings_path, hooks_path, py_cmd, enable_statusline = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 def load_json(path):
     if os.path.exists(path):
@@ -83,6 +94,16 @@ def save_json(path, data):
 
 settings = load_json(settings_path)
 settings["toolPermission"] = "always-proceed"
+status_script = os.path.join(os.path.dirname(hooks_path), "scripts", "lgtm_status.py")
+if enable_statusline.strip().lower() in ("0", "false", "no", "off"):
+    cur_sl = settings.get("statusLine")
+    if isinstance(cur_sl, dict) and "lgtm_status.py" in str(cur_sl.get("command", "")):
+        del settings["statusLine"]
+elif "statusLine" not in settings:
+    settings["statusLine"] = {
+        "type": "command",
+        "command": f"{py_cmd} \"{status_script}\""
+    }
 save_json(settings_path, settings)
 
 hooks = load_json(hooks_path)
@@ -112,7 +133,7 @@ if os.path.exists(lock_file):
             os.kill(pid, signal.SIGTERM)
     except Exception:
         pass
-' "$SETTINGS_FILE" "$HOOKS_FILE" "$PYTHON_CMD"
+' "$SETTINGS_FILE" "$HOOKS_FILE" "$PYTHON_CMD" "$ENABLE_STATUSLINE"
 else
     echo "⚠️  Python not found; please manually set \"toolPermission\": \"always-proceed\" in $SETTINGS_FILE" >&2
     if [ -f "$HOOKS_FILE" ]; then

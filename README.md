@@ -62,6 +62,26 @@ AGY_HOOK_BYPASS=1 agy
 
 The hook checks this environment variable on its own process and allows commands immediately.
 
+### Statusline Indicator
+
+The installer adds `scripts/lgtm_status.py` as `statusLine` in `~/.gemini/antigravity-cli/settings.json` when no custom statusline is already configured.
+
+| Badge | State |
+|---|---|
+| `● lgtm` | Hook active and daemon running |
+| `○ lgtm` | Hook active and daemon idle |
+| `lgtm off` | `AGY_HOOK_BYPASS=1` is set |
+
+Disable the indicator at runtime or during install:
+
+| Scope | Command |
+|---|---|
+| Single session | `LGTM_STATUSLINE=0 agy` |
+| Install on macOS and Linux | `bash install.sh --no-statusline` |
+| Install on Windows | `.\install.ps1 -NoStatusline` |
+
+If you already use a custom statusline script, call `~/.gemini/config/scripts/lgtm_status.py` from it to append the badge.
+
 ## Testing
 
 Run the built-in test suite to verify that the security hook correctly blocks destructive actions, command injections, and secret exfiltration:

@@ -1,4 +1,8 @@
-﻿$ErrorActionPreference = "Stop"
+﻿param(
+    [switch]$NoStatusline
+)
+
+$ErrorActionPreference = "Stop"
 
 $GeminiConfigDir = Join-Path $env:USERPROFILE ".gemini\config"
 $ScriptsDir = Join-Path $GeminiConfigDir "scripts"
@@ -12,22 +16,25 @@ New-Item -Path $CliSettingsDir -ItemType Directory -Force | Out-Null
 
 $ScriptDir = if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { $null }
 
-# Copy or download the AI approval hook and daemon
+# Copy or download the AI approval hook, daemon, and statusline helper
 if ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "scripts\lgtm_hook.py"))) {
     $srcDir = Join-Path $ScriptDir "scripts"
     if ((Resolve-Path $srcDir).Path -ne (Resolve-Path $ScriptsDir).Path) {
         Copy-Item -Path (Join-Path $srcDir "lgtm_hook.py") -Destination (Join-Path $ScriptsDir "lgtm_hook.py") -Force
         Copy-Item -Path (Join-Path $srcDir "lgtm_daemon.py") -Destination (Join-Path $ScriptsDir "lgtm_daemon.py") -Force
+        Copy-Item -Path (Join-Path $srcDir "lgtm_status.py") -Destination (Join-Path $ScriptsDir "lgtm_status.py") -Force
     }
 } elseif ($ScriptDir -and (Test-Path (Join-Path $ScriptDir "lgtm_hook.py"))) {
     if ((Resolve-Path $ScriptDir).Path -ne (Resolve-Path $ScriptsDir).Path) {
         Copy-Item -Path (Join-Path $ScriptDir "lgtm_hook.py") -Destination (Join-Path $ScriptsDir "lgtm_hook.py") -Force
         Copy-Item -Path (Join-Path $ScriptDir "lgtm_daemon.py") -Destination (Join-Path $ScriptsDir "lgtm_daemon.py") -Force
+        Copy-Item -Path (Join-Path $ScriptDir "lgtm_status.py") -Destination (Join-Path $ScriptsDir "lgtm_status.py") -Force
     }
 } else {
     Write-Host "Downloading LGTM scripts..."
     Invoke-WebRequest -Uri "$RepoRawUrl/scripts/lgtm_hook.py" -OutFile (Join-Path $ScriptsDir "lgtm_hook.py")
     Invoke-WebRequest -Uri "$RepoRawUrl/scripts/lgtm_daemon.py" -OutFile (Join-Path $ScriptsDir "lgtm_daemon.py")
+    Invoke-WebRequest -Uri "$RepoRawUrl/scripts/lgtm_status.py" -OutFile (Join-Path $ScriptsDir "lgtm_status.py")
 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -47,6 +54,19 @@ if ($null -eq $settings) {
     $settings = New-Object PSObject
 }
 $settings | Add-Member -NotePropertyName "toolPermission" -NotePropertyValue "always-proceed" -Force
+$disableStatusline = $NoStatusline -or ($env:LGTM_STATUSLINE -match '^(0|false|no|off)$')
+if ($disableStatusline) {
+    if (($settings.PSObject.Properties.Name -contains "statusLine") -and ($settings.statusLine.command -like "*lgtm_status.py*")) {
+        $settings.PSObject.Properties.Remove("statusLine")
+    }
+} elseif (-not ($settings.PSObject.Properties.Name -contains "statusLine")) {
+    $statusScript = Join-Path $ScriptsDir "lgtm_status.py"
+    $statusLineEntry = [ordered]@{
+        type    = "command"
+        command = "python `"$statusScript`""
+    }
+    $settings | Add-Member -NotePropertyName "statusLine" -NotePropertyValue $statusLineEntry -Force
+}
 [System.IO.File]::WriteAllText($SettingsFile, (($settings | ConvertTo-Json -Depth 10) + "`n"), $utf8NoBom)
 
 # Merge lgtm-hook into hooks.json without clobbering existing hooks
