@@ -1,7 +1,7 @@
 <h1 align="center">lgtm</h1>
 
 <p align="center">
-  A fast local security daemon for Google Antigravity (agy). It evaluates shell commands before they run and blocks destructive actions or secret leaks.
+  A fast local security daemon that uses an LLM to auto approve shell commands for Google Antigravity (agy), blocking destructive actions and secret leaks before they run.
 </p>
 
 <p align="center">
