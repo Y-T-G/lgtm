@@ -12,9 +12,10 @@
 
 ## Highlights
 
-- **Persistent evaluation daemon.** Spawns an `agy` background process in stream mode. The daemon evaluates commands in 2 seconds instead of the 15 seconds required for a cold boot.
-- **Fast-path for safe commands.** Commands like `ls`, `cat`, `grep` and `git status` are approved instantly without LLM evaluation.
-- **Auto-fallback.** If the Gemini API is rate limited or times out, the hook falls back to a slow standalone process.
+- **Persistent evaluation daemon.** Spawns an `agy` background process in stream mode. The daemon evaluates commands in ~2 seconds instead of the ~15 seconds required for a cold boot.
+- **Fast-path allow & fast-deny.** Read-only commands (`ls`, `cat`, `grep`, `git status`, etc.) and unambiguous destructive patterns (`rm -rf /`, partition overwrites, credential exfiltration) resolve locally in milliseconds without LLM latency.
+- **Optional direct API fast-lane.** Automatically uses `GROQ_API_KEY` or `LGTM_GEMINI_API_KEY` / `GEMINI_API_KEY` if set in the environment, falling back to the local `agy` daemon seamlessly.
+- **Auto-fallback.** If the daemon fails, times out, or hits transient network errors, the hook falls back to an isolated standalone `agy` process with retries.
 - **Token limit protection.** The background daemon restarts every 20 evaluations to prevent its context window from growing indefinitely.
 
 ## Why LGTM vs. Built-in Auto Mode
@@ -30,8 +31,8 @@ Antigravity CLI includes a built-in Auto mode (`--mode auto`), but `lgtm` provid
 
 The system uses two components:
 
-1. **The pre-tool hook** (`lgtm_hook.py`): Antigravity calls this script before running a command. It checks the fast-path list. If the command is not on the list, it connects to a local Unix socket.
-2. **The background daemon** (`lgtm_daemon.py`): The hook spawns this daemon if it is not running. The daemon keeps an `agy` instance alive, receives prompts over the socket, feeds them into the `agy` stream, and returns the LLM's decision.
+1. **The pre-tool hook** (`lgtm_hook.py`): Antigravity calls this script before running a command. It runs local fast-deny and fast-path checks first. If LLM review is needed, it checks optional API keys (`GROQ_API_KEY`, `LGTM_GEMINI_API_KEY` / `GEMINI_API_KEY`) or sends the prompt to the local daemon over a token-authenticated localhost TCP socket (`127.0.0.1`).
+2. **The background daemon** (`lgtm_daemon.py`): The hook spawns this daemon if it is not running. The daemon keeps an isolated `agy` instance alive, receives prompts over localhost TCP, feeds them into the `agy` stream, and returns the LLM's decision.
 
 ## Install
 
@@ -47,19 +48,19 @@ curl -fsSL https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.sh | bash
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Y-T-G/lgtm/main/install.ps1" -OutFile "$env:TEMP\install.ps1"; & "$env:TEMP\install.ps1"
 ```
 
-The script sets up `~/.gemini/config/scripts/lgtm_hook.py`, registers it in `~/.gemini/config/hooks.json`, and updates `~/.gemini/antigravity-cli/settings.json` to enable `toolPermission: "always-proceed"`.
+The script sets up `~/.gemini/config/scripts/lgtm_hook.py`, merges `lgtm-hook` into `~/.gemini/config/hooks.json`, and updates `~/.gemini/antigravity-cli/settings.json` to enable `toolPermission: "always-proceed"`.
 
 `always-proceed` is currently required due to an upstream bug in the `agy` CLI where hook approval does not automatically bypass the interactive tool permission prompt (tracked in [google-antigravity/antigravity-cli#1059](https://github.com/google-antigravity/antigravity-cli/issues/1059)).
 
 ### Manual Bypass
 
-If you need to run a blocked command, you can explicitly bypass the hook by setting the environment variable:
+If you need to launch an `agy` session with the hook disabled, set `AGY_HOOK_BYPASS=1` in the environment when starting `agy`:
 
 ```bash
-AGY_HOOK_BYPASS=1 rm -rf build/
+AGY_HOOK_BYPASS=1 agy
 ```
 
-The hook reads this variable and allows the command instantly.
+The hook checks this environment variable on its own process and allows commands immediately.
 
 ## Testing
 
@@ -69,6 +70,12 @@ Run the built-in test suite to verify that the security hook correctly blocks de
 python3 test.py
 # or
 ./test.sh
+```
+
+Run only the fast local unit tests (no LLM calls):
+
+```bash
+python3 test.py --unit
 ```
 
 To test an individual command:
@@ -86,4 +93,3 @@ python3 test.py --installed
 ## License
 
 MIT
-
